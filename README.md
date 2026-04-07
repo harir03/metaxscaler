@@ -176,4 +176,4 @@ credit-approval-env/
 
 ---
 
-> **Note:** This environment is built on top of the [Intelli-Credit](docs/intellicredit.md) credit decisioning engine, adapting its scoring framework and domain logic into an RL-ready format.
+
