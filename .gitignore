@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+venv/
+.venv/
+.venv-*/
+*.pkl
+*.pt
+
+# Frontend
+node_modules/
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ML model artifacts
+backend/ml/.model_registry/
+
+# Uploads & Output
+data/uploads/
+outputs/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Docker
+.docker/
+
+# OpenEnv
+outputs/

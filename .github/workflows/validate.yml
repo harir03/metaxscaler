@@ -1,0 +1,129 @@
+name: OpenEnv Validate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  DOCKER_BUILD_TIMEOUT: 600
+
+jobs:
+
+  # ── Step 1: Lint & Unit Tests ──
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pydantic>=2.10.0 fastapi>=0.115.0 uvicorn httpx pyyaml
+
+      - name: Validate openenv.yaml
+        run: |
+          python -c "
+          import yaml, sys
+          with open('openenv.yaml') as f:
+              data = yaml.safe_load(f)
+          assert 'name' in data, 'Missing name'
+          assert 'tasks' in data, 'Missing tasks'
+          assert len(data['tasks']) >= 3, f'Need 3+ tasks, got {len(data[\"tasks\"])}'
+          for t in data['tasks']:
+              assert 'name' in t, 'Task missing name'
+              assert 'grader' in t, f'Task {t[\"name\"]} missing grader'
+          print(f'openenv.yaml OK: {data[\"name\"]} with {len(data[\"tasks\"])} tasks')
+          "
+
+      - name: Validate models import
+        run: |
+          python -c "
+          from models import CreditAction, CreditObservation, CreditState, EnvResult
+          print('Models import OK')
+          a = CreditAction(decision='approve', reasoning='test', confidence=0.8)
+          print(f'CreditAction OK: {a.decision}')
+          "
+
+      - name: Run environment smoke tests
+        run: python tests/test_openenv_env.py
+
+      - name: Validate inference.py imports
+        run: |
+          python -c "
+          # Just check it parses and imports work (don't run — needs API key)
+          import ast
+          with open('inference.py') as f:
+              tree = ast.parse(f.read())
+          print(f'inference.py parses OK: {len(tree.body)} top-level statements')
+          "
+
+  # ── Step 2: Docker Build ──
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -f server/Dockerfile -t credit-approval-env .
+          echo "Docker build succeeded"
+
+      - name: Test container starts
+        run: |
+          docker run -d --name test-env -p 8000:8000 credit-approval-env
+          sleep 5
+
+          # Health check
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Health check passed (HTTP 200)"
+          else
+            echo "Health check failed (HTTP $HTTP_CODE)"
+            docker logs test-env
+            exit 1
+          fi
+
+          # Test /reset
+          RESET_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"task_name": "credit-approval-easy"}' \
+            http://localhost:8000/reset)
+          if [ "$RESET_CODE" = "200" ]; then
+            echo "/reset passed (HTTP 200)"
+          else
+            echo "/reset failed (HTTP $RESET_CODE)"
+            docker logs test-env
+            exit 1
+          fi
+
+          docker stop test-env
+          docker rm test-env
+          echo "Container test passed"
+
+  # ── Step 3: E2E with server ──
+  e2e-test:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          pip install --upgrade pip
+          pip install pydantic>=2.10.0 fastapi>=0.115.0 uvicorn httpx pyyaml
+
+      - name: Run E2E test
+        run: python tests/test_e2e.py

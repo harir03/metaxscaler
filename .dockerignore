@@ -1,0 +1,25 @@
+# Ignore everything not needed for the environment server
+.git
+.github
+.vscode
+.venv
+.venv-*
+venv
+node_modules
+.next
+frontend/
+tests/
+docs/
+data/
+documents/
+*.log
+*.png
+*.svg
+*.md
+!README.md
+__pycache__
+*.pyc
+.env
+.env.*
+!.env.example
+outputs/
