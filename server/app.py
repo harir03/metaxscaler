@@ -68,3 +68,12 @@ async def root():
     return {"service": "Credit Approval Environment", "version": "1.0.0",
             "endpoints": {"reset": "POST /reset", "step": "POST /step", "state": "GET /state", "health": "GET /health"},
             "tasks": ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard"]}
+
+
+def main():
+    import uvicorn
+    uvicorn.run("server.app:app", host="0.0.0.0", port=8000)
+
+
+if __name__ == "__main__":
+    main()

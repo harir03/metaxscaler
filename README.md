@@ -1,3 +1,18 @@
+---
+title: Credit Approval Environment
+emoji: 🏦
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+license: mit
+tags:
+  - openenv
+  - reinforcement-learning
+  - credit-approval
+---
+
 # 🏦 Credit Approval Environment — OpenEnv RL
 
 > An AI agent evaluates corporate loan applications with realistic Indian financial data, risk indicators, and market context. Features 3 difficulty levels with deterministic grading and fraud detection challenges.

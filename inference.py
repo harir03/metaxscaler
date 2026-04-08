@@ -1,16 +1,23 @@
+"""
+Credit Approval Environment — Inference Script
+================================================
+Uses OpenEnv SDK (from_docker_image) + OpenAI Client.
+Follows mandatory stdout format: [START] / [STEP] / [END].
+"""
+
+import asyncio
 import os
 import json
 import textwrap
 from typing import List, Optional
 
 from openai import OpenAI
-from client import CreditApprovalClient
-from models import CreditAction
+from openenv import GenericEnvClient, GenericAction
 
+IMAGE_NAME = os.getenv("IMAGE_NAME")  # Docker image for from_docker_image()
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-ENV_URL = os.getenv("ENV_URL", "http://localhost:8000")
 BENCHMARK = "credit_approval"
 
 TASKS = ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard"]
@@ -35,20 +42,26 @@ SYSTEM_PROMPT = textwrap.dedent("""\
     Be thorough. Mention specific metrics.""")
 
 
-def log_start(task, env, model):
+# ── Logging (mandatory stdout format) ──
+
+def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
-def log_step(step, action, reward, done, error):
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
     err = error if error else "null"
     act = action.replace("\n", " ").replace("\r", "")[:200]
     print(f"[STEP] step={step} action={act} reward={reward:.2f} done={str(done).lower()} error={err}", flush=True)
 
-def log_end(success, steps, score, rewards):
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rstr = ",".join(f"{r:.2f}" for r in rewards)
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rstr}", flush=True)
 
 
-def _fmt_obs(obs):
+# ── Observation formatting ──
+
+def _fmt_obs(obs: dict) -> str:
     co = obs.get("company", {})
     fi = obs.get("financials", {})
     ri = obs.get("risk", {})
@@ -80,7 +93,10 @@ MARKET: Outlook={mk.get('sector_outlook')} | NPA={mk.get('sector_npa_rate', 0):.
     return out
 
 
-def _get_decision(llm, obs_data):
+# ── LLM decision ──
+
+def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
+    """Returns a dict with decision, reasoning, confidence."""
     prompt = _fmt_obs(obs_data)
     try:
         resp = llm.chat.completions.create(
@@ -96,65 +112,78 @@ def _get_decision(llm, obs_data):
             text = text.split("```")[1].split("```")[0].strip()
 
         parsed = json.loads(text)
-        return CreditAction(
-            decision=parsed.get("decision", "reject"),
-            reasoning=parsed.get("reasoning", ""),
-            confidence=float(parsed.get("confidence", 0.5)),
-        )
+        return {
+            "decision": parsed.get("decision", "reject"),
+            "reasoning": parsed.get("reasoning", ""),
+            "confidence": float(parsed.get("confidence", 0.5)),
+        }
     except json.JSONDecodeError:
-        # couldn't parse json, try to extract from free text
         low = (text or "").lower()
         dec = "reject"
         if "approve" in low and "reject" not in low:
             dec = "approve"
         elif "conditional" in low:
             dec = "conditional"
-        return CreditAction(decision=dec, reasoning=text or "parse error", confidence=0.3)
+        return {"decision": dec, "reasoning": text or "parse error", "confidence": 0.3}
     except Exception as e:
         print(f"[DEBUG] llm error: {e}", flush=True)
-        return CreditAction(decision="reject", reasoning=f"error: {e}", confidence=0.1)
+        return {"decision": "reject", "reasoning": f"error: {e}", "confidence": 0.1}
 
 
-def main():
+# ── Main ──
+
+async def main() -> None:
     llm = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    env = CreditApprovalClient(base_url=ENV_URL)
 
-    overall_rewards = []
+    # Use OpenEnv SDK to spin up the environment from Docker image
+    env = await GenericEnvClient.from_docker_image(IMAGE_NAME)
+
+    overall_rewards: List[float] = []
     overall_steps = 0
     total_score = 0.0
 
-    for task in TASKS:
-        log_start(task, BENCHMARK, MODEL_NAME)
-        rewards = []
-        steps = 0
+    try:
+        for task in TASKS:
+            log_start(task, BENCHMARK, MODEL_NAME)
+            rewards: List[float] = []
+            steps = 0
 
+            try:
+                for ep in range(EPISODES_PER_TASK):
+                    result = await env.reset(task_name=task)
+                    obs = result.observation if isinstance(result.observation, dict) else result.observation.dict()
+
+                    action_data = _get_decision(llm, obs)
+                    action = GenericAction(action_data)
+
+                    result = await env.step(action)
+
+                    reward = result.reward or 0.0
+                    rewards.append(reward)
+                    steps += 1
+                    error = getattr(result, "last_action_error", None)
+                    log_step(steps, f"{action_data['decision']}(conf={action_data['confidence']:.2f})", reward, result.done, error)
+
+            except Exception as e:
+                print(f"[DEBUG] {task} failed: {e}", flush=True)
+
+            task_score = sum(rewards) / len(rewards) if rewards else 0.0
+            task_score = max(0.0, min(1.0, task_score))
+            log_end(task_score >= 0.3, steps, task_score, rewards)
+
+            overall_rewards.extend(rewards)
+            overall_steps += steps
+            total_score += task_score
+
+        avg = total_score / len(TASKS) if TASKS else 0.0
+        print(f"\n[SUMMARY] overall_score={max(0, min(1, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}", flush=True)
+
+    finally:
         try:
-            for ep in range(EPISODES_PER_TASK):
-                result = env.reset(task_name=task)
-                obs = result.observation.model_dump()
-
-                action = _get_decision(llm, obs)
-                result = env.step(action)
-
-                rewards.append(result.reward)
-                steps += 1
-                err = result.info.get("error") if result.info else None
-                log_step(steps, f"{action.decision}(conf={action.confidence:.2f})", result.reward, result.done, err)
+            await env.close()
         except Exception as e:
-            print(f"[DEBUG] {task} failed: {e}", flush=True)
-
-        task_score = sum(rewards) / len(rewards) if rewards else 0.0
-        task_score = max(0.0, min(1.0, task_score))
-        log_end(task_score >= 0.3, steps, task_score, rewards)
-
-        overall_rewards.extend(rewards)
-        overall_steps += steps
-        total_score += task_score
-
-    avg = total_score / len(TASKS) if TASKS else 0.0
-    print(f"\n[SUMMARY] overall_score={max(0, min(1, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}", flush=True)
-    env.close()
+            print(f"[DEBUG] env.close() error (container cleanup): {e}", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
