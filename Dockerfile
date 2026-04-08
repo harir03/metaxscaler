@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r server/requirements.txt
 COPY models.py .
 COPY server/ server/
 COPY __init__.py .
+COPY openenv.yaml .
+COPY pyproject.toml .
 
 # HF Spaces requires port 7860
 EXPOSE 7860

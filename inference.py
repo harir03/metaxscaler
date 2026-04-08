@@ -8,13 +8,14 @@ Follows mandatory stdout format: [START] / [STEP] / [END].
 import asyncio
 import os
 import json
+import sys
 import textwrap
 from typing import List, Optional
 
 from openai import OpenAI
 from openenv import GenericEnvClient, GenericAction
 
-IMAGE_NAME = os.getenv("IMAGE_NAME")  # Docker image for from_docker_image()
+IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")  # Docker image for from_docker_image()
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
@@ -56,7 +57,7 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rstr = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rstr}", flush=True)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rstr}", flush=True)
 
 
 # ── Observation formatting ──
@@ -126,7 +127,7 @@ def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
             dec = "conditional"
         return {"decision": dec, "reasoning": text or "parse error", "confidence": 0.3}
     except Exception as e:
-        print(f"[DEBUG] llm error: {e}", flush=True)
+        print(f"[DEBUG] llm error: {e}", file=sys.stderr, flush=True)
         return {"decision": "reject", "reasoning": f"error: {e}", "confidence": 0.1}
 
 
@@ -165,7 +166,7 @@ async def main() -> None:
                     log_step(steps, f"{action_data['decision']}(conf={action_data['confidence']:.2f})", reward, result.done, error)
 
             except Exception as e:
-                print(f"[DEBUG] {task} failed: {e}", flush=True)
+                print(f"[DEBUG] {task} failed: {e}", file=sys.stderr, flush=True)
 
             task_score = sum(rewards) / len(rewards) if rewards else 0.0
             task_score = max(0.0, min(1.0, task_score))
@@ -176,13 +177,13 @@ async def main() -> None:
             total_score += task_score
 
         avg = total_score / len(TASKS) if TASKS else 0.0
-        print(f"\n[SUMMARY] overall_score={max(0, min(1, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}", flush=True)
+        print(f"[SUMMARY] overall_score={max(0, min(1, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}", file=sys.stderr, flush=True)
 
     finally:
         try:
             await env.close()
         except Exception as e:
-            print(f"[DEBUG] env.close() error (container cleanup): {e}", flush=True)
+            print(f"[DEBUG] env.close() error (container cleanup): {e}", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":

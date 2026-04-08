@@ -54,7 +54,10 @@ async def step(req: StepReq):
 @app.get("/state")
 async def state():
     s = env.state()
-    return {"episode_id": s.episode_id, "step": s.step, "task_name": s.task_name, "difficulty": s.difficulty, "done": s.done, "company_name": s.company_name}
+    # Don't expose ground truth in state — only internal fields
+    return {"episode_id": s.episode_id, "step": s.step, "task_name": s.task_name,
+            "difficulty": s.difficulty, "done": s.done, "company_name": s.company_name,
+            "max_steps": s.max_steps}
 
 
 @app.get("/health")
