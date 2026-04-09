@@ -35,7 +35,8 @@ async def reset(req: ResetReq = ResetReq()):
         task = req.task_name or "credit-approval-easy"
         result = env.reset(task_name=task)
         log.info(f"reset: task={task} company={result.observation.company.name}")
-        return {"observation": result.observation.model_dump(), "reward": result.reward, "done": result.done, "info": result.info}
+        return {"observation": result.observation.model_dump(), "reward": result.reward,
+                "done": result.done, "info": result.info}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -43,10 +44,14 @@ async def reset(req: ResetReq = ResetReq()):
 @app.post("/step")
 async def step(req: StepReq):
     try:
-        action = CreditAction(decision=req.decision, reasoning=req.reasoning, confidence=req.confidence, suggested_terms=req.suggested_terms)
+        action = CreditAction(
+            decision=req.decision, reasoning=req.reasoning,
+            confidence=req.confidence, suggested_terms=req.suggested_terms
+        )
         result = env.step(action)
         log.info(f"step: decision={action.decision} reward={result.reward:.4f}")
-        return {"observation": result.observation.model_dump(), "reward": result.reward, "done": result.done, "info": result.info}
+        return {"observation": result.observation.model_dump(), "reward": result.reward,
+                "done": result.done, "info": result.info}
     except RuntimeError as e:
         raise HTTPException(400, str(e))
 
@@ -54,7 +59,6 @@ async def step(req: StepReq):
 @app.get("/state")
 async def state():
     s = env.state()
-    # Don't expose ground truth in state — only internal fields
     return {"episode_id": s.episode_id, "step": s.step, "task_name": s.task_name,
             "difficulty": s.difficulty, "done": s.done, "company_name": s.company_name,
             "max_steps": s.max_steps}
@@ -69,14 +73,11 @@ async def health():
 @app.get("/")
 async def root():
     return {"service": "Credit Approval Environment", "version": "1.0.0",
-            "endpoints": {"reset": "POST /reset", "step": "POST /step", "state": "GET /state", "health": "GET /health"},
+            "endpoints": {"reset": "POST /reset", "step": "POST /step",
+                        "state": "GET /state", "health": "GET /health"},
             "tasks": ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard"]}
 
 
-def main():
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run("server.app:app", host="0.0.0.0", port=8000)
-
-
-if __name__ == "__main__":
-    main()

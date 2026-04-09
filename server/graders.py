@@ -12,27 +12,27 @@ def _norm(raw: str) -> str:
     return raw
 
 
-def _match_score(pred: str, gt: str) -> float:
+def _match_score(pred, gt):
     p, g = _norm(pred), _norm(gt)
     if p == g:
         return 1.0
-    # partial credit when approve <-> conditional
     if {p, g} == {"approve", "conditional"}:
-        return 0.5
+        return 0.5  # partial credit
     return 0.0
 
 
-def _reasoning_score(text: str, gt_decision: str) -> float:
+def _reasoning_score(text, gt_decision):
     if not text or len(text.strip()) < 10:
         return 0.0
 
     score = 0.0
     low = text.lower()
 
+    # length component
     words = len(text.split())
     score += min(words / 50, 1.0) * 0.3
 
-    # check for financial terminology
+    # financial terminology
     keywords = [
         "dscr", "debt", "equity", "ratio", "margin", "revenue", "growth",
         "cash flow", "profit", "loss", "risk", "compliance", "rating",
@@ -42,7 +42,7 @@ def _reasoning_score(text: str, gt_decision: str) -> float:
     hits = sum(1 for kw in keywords if kw in low)
     score += min(hits * 0.05, 0.4)
 
-    # does the reasoning align with the correct decision direction?
+    # directional alignment
     if gt_decision == "reject":
         neg = ["reject", "deny", "risk", "concern", "flag", "weak", "negative", "default"]
         if any(t in low for t in neg):
@@ -59,7 +59,7 @@ def _reasoning_score(text: str, gt_decision: str) -> float:
     return min(score, 1.0)
 
 
-def _confidence_score(conf: float, correct: bool, diff: str) -> float:
+def _confidence_score(conf, correct, diff):
     if correct:
         if diff == "easy":
             return conf
@@ -67,7 +67,6 @@ def _confidence_score(conf: float, correct: bool, diff: str) -> float:
             return 1.0 - abs(conf - 0.6) * 2
         else:
             return 0.5 if conf > 0.8 else min(conf + 0.3, 1.0)
-    # wrong answer — at least be uncertain about it
     return max(1.0 - conf, 0.0)
 
 
@@ -79,7 +78,8 @@ def grade_easy(decision, reasoning, confidence, ground_truth_decision, **kw) -> 
     total = 0.70 * d + 0.15 * r + 0.15 * c
     return {
         "score": round(min(max(total, 0.0), 1.0), 4),
-        "breakdown": {"decision_score": round(d, 4), "reasoning_score": round(r, 4), "confidence_score": round(c, 4)},
+        "breakdown": {"decision_score": round(d, 4), "reasoning_score": round(r, 4),
+                      "confidence_score": round(c, 4)},
         "weights": {"decision": 0.70, "reasoning": 0.15, "confidence": 0.15},
     }
 
@@ -92,7 +92,8 @@ def grade_medium(decision, reasoning, confidence, ground_truth_decision, **kw) -
     total = 0.50 * d + 0.30 * r + 0.20 * c
     return {
         "score": round(min(max(total, 0.0), 1.0), 4),
-        "breakdown": {"decision_score": round(d, 4), "reasoning_score": round(r, 4), "confidence_score": round(c, 4)},
+        "breakdown": {"decision_score": round(d, 4), "reasoning_score": round(r, 4),
+                      "confidence_score": round(c, 4)},
         "weights": {"decision": 0.50, "reasoning": 0.30, "confidence": 0.20},
     }
 
@@ -102,7 +103,6 @@ def grade_hard(decision, reasoning, confidence, ground_truth_decision, **kw) -> 
     r = _reasoning_score(reasoning, ground_truth_decision)
     c = _confidence_score(confidence, d >= 0.5, "hard")
 
-    # bonus for spotting specific fraud patterns
     fraud_kw = [
         "wilful defaulter", "circular trad", "revenue inflation",
         "evergreening", "related party", "audit qualification",
@@ -119,7 +119,8 @@ def grade_hard(decision, reasoning, confidence, ground_truth_decision, **kw) -> 
             "decision_score": round(d, 4), "reasoning_score": round(r, 4),
             "confidence_score": round(c, 4), "fraud_detection_bonus": round(fraud_bonus, 4),
         },
-        "weights": {"decision": 0.40, "reasoning": 0.40, "confidence": 0.20, "fraud_bonus": "up to 0.15"},
+        "weights": {"decision": 0.40, "reasoning": 0.40, "confidence": 0.20,
+                    "fraud_bonus": "up to 0.15"},
     }
 
 

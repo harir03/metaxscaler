@@ -1,10 +1,9 @@
 import random
-import uuid
 from typing import Tuple
 
 from models import (
     CompanyProfile, FinancialMetrics, RiskIndicators,
-    MarketContext, CreditObservation, CreditState,
+    MarketContext, CreditObservation,
 )
 
 SECTORS = [
@@ -123,8 +122,8 @@ def _make_medium():
         loan_type=random.choice(LOAN_TYPES),
         loan_amount_cr=round(random.uniform(20, 150), 2),
     )
-    # flip between a borderline conditional-approve and a borderline reject
     if random.random() < 0.5:
+        # borderline conditional-approve
         fin = FinancialMetrics(
             dscr=round(random.uniform(1.1, 1.5), 2),
             current_ratio=round(random.uniform(1.0, 1.4), 2),
@@ -145,6 +144,7 @@ def _make_medium():
         gt_decision, gt_score = "conditional", random.randint(500, 620)
         reason = "Borderline financials, acceptable but needs conditions"
     else:
+        # borderline reject
         fin = FinancialMetrics(
             dscr=round(random.uniform(0.9, 1.2), 2),
             current_ratio=round(random.uniform(0.8, 1.2), 2),
@@ -179,8 +179,7 @@ def _make_medium():
 
 
 def _make_hard():
-    """These are designed to look good on paper but have buried red flags."""
-
+    """Profiles that look good on paper but have buried red flags."""
     company = CompanyProfile(
         name=_rand_name(), sector=random.choice(SECTORS),
         incorporation_year=random.randint(1995, 2015),
@@ -192,7 +191,6 @@ def _make_hard():
     trap = random.choice(["wilful", "rev_inflate", "circular", "evergreen"])
 
     if trap == "wilful":
-        # great numbers but wilful defaulter flag is True
         fin = FinancialMetrics(
             dscr=round(random.uniform(2.0, 3.0), 2),
             current_ratio=round(random.uniform(1.8, 2.5), 2),
@@ -212,7 +210,7 @@ def _make_hard():
         reason = "wilful defaulter despite excellent financials"
 
     elif trap == "rev_inflate":
-        # 80-200% revenue growth but margins are trash and cash flow negative
+        # crazy growth but margins are trash and cash flow negative
         fin = FinancialMetrics(
             dscr=round(random.uniform(1.5, 2.5), 2),
             current_ratio=round(random.uniform(1.2, 1.8), 2),
@@ -240,7 +238,7 @@ def _make_hard():
             net_profit_margin=round(random.uniform(5.0, 10.0), 2),
             revenue_growth_yoy=round(random.uniform(25.0, 50.0), 2),
             interest_coverage_ratio=round(random.uniform(2.0, 4.0), 2),
-            working_capital_days=random.randint(10, 25),  # suspiciously low
+            working_capital_days=random.randint(10, 25),  # way too low
             cash_flow_positive=True,
         )
         risk = RiskIndicators(
@@ -281,12 +279,10 @@ def _make_hard():
         company=company, financials=fin, risk=risk, market=mkt,
         step=1, task_name="credit-approval-hard", difficulty="hard",
     )
-    # hard cases always have reject as ground truth
     return obs, "reject", random.randint(150, 350), reason
 
 
 def generate_task(task_name: str) -> Tuple[CreditObservation, str, int, str]:
-    """Returns (observation, ground_truth_decision, ground_truth_score, reason)"""
     if task_name == "credit-approval-easy":
         return _make_easy_approve() if random.random() < 0.5 else _make_easy_reject()
     elif task_name == "credit-approval-medium":

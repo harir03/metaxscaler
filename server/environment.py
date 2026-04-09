@@ -16,10 +16,7 @@ VALID_TASKS = [
 
 
 class CreditApprovalEnvironment:
-    """
-    Single-step RL env. Each episode is one company to evaluate.
-    Agent sees financial data, makes a credit decision, gets scored.
-    """
+    """Single-step RL env. Agent sees financial data, makes a credit decision, gets scored."""
 
     def __init__(self):
         self._state = None
@@ -49,7 +46,8 @@ class CreditApprovalEnvironment:
 
         return EnvResult(
             observation=obs, reward=0.0, done=False,
-            info={"episode_id": self._state.episode_id, "task": task_name, "difficulty": obs.difficulty},
+            info={"episode_id": self._state.episode_id, "task": task_name,
+                  "difficulty": obs.difficulty},
         )
 
     def step(self, action: CreditAction):

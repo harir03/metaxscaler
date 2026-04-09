@@ -1,6 +1,3 @@
-# Credit Approval Environment — Inference Dependencies
-# The OpenEnv evaluator installs these before running inference.py
 openai>=1.0.0
-openenv-core>=0.1.0
 httpx>=0.28.0
 pydantic>=2.10.0

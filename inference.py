@@ -1,16 +1,3 @@
-"""
-Credit Approval Environment — Inference Script
-================================================
-Uses local DockerEnvClient (no openenv-core needed) + OpenAI Client.
-Follows mandatory stdout format: [START] / [STEP] / [END].
-
-MANDATORY ENV VARS:
-    API_BASE_URL       The API endpoint for the LLM
-    MODEL_NAME         The model identifier
-    HF_TOKEN           Your HuggingFace / API key
-    IMAGE_NAME         Docker image name (set by evaluator)
-"""
-
 import asyncio
 import os
 import json
@@ -21,12 +8,10 @@ import traceback
 from typing import List, Optional
 
 
-# ── Auto-install openai (lightweight, ~5s) ──
-def _ensure_installed(package_name: str, pip_name: str = None):
-    """Install a package if it's not already available."""
-    pip_name = pip_name or package_name
+def _ensure_installed(pkg, pip_name=None):
+    pip_name = pip_name or pkg
     try:
-        __import__(package_name)
+        __import__(pkg)
     except ImportError:
         print(f"[SETUP] Installing {pip_name}...", file=sys.stderr, flush=True)
         subprocess.check_call(
@@ -39,11 +24,8 @@ def _ensure_installed(package_name: str, pip_name: str = None):
 _ensure_installed("openai", "openai>=1.0.0")
 
 from openai import OpenAI  # noqa: E402
-
-# Local lightweight client — NO openenv-core dependency
 from env_client import DockerEnvClient  # noqa: E402
 
-# ── Configuration from environment ──
 IMAGE_NAME = os.getenv("IMAGE_NAME")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
@@ -54,7 +36,7 @@ TASKS = ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard
 EPISODES_PER_TASK = 3
 TEMPERATURE = 0.3
 MAX_TOKENS = 500
-SUCCESS_SCORE_THRESHOLD = 0.3
+SUCCESS_THRESHOLD = 0.3
 
 SYSTEM_PROMPT = textwrap.dedent("""\
     You are an expert credit analyst at a major Indian bank. You review corporate
@@ -73,33 +55,22 @@ SYSTEM_PROMPT = textwrap.dedent("""\
     Be thorough. Mention specific metrics.""")
 
 
-# ── Logging (mandatory stdout format) ──
-
-def log_start(task: str, env: str, model: str) -> None:
+def log_start(task, env, model):
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    error_val = error if error else "null"
-    done_val = str(done).lower()
+def log_step(step, action, reward, done, error):
+    err = error if error else "null"
     act = action.replace("\n", " ").replace("\r", "")[:200]
-    print(
-        f"[STEP] step={step} action={act} reward={reward:.2f} done={done_val} error={error_val}",
-        flush=True,
-    )
+    print(f"[STEP] step={step} action={act} reward={reward:.2f} done={str(done).lower()} error={err}", flush=True)
 
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(
-        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
-        flush=True,
-    )
+def log_end(success, steps, score, rewards):
+    rstr = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rstr}", flush=True)
 
 
-# ── Observation formatting ──
-
-def _fmt_obs(obs: dict) -> str:
+def _fmt_obs(obs):
     co = obs.get("company", {})
     fi = obs.get("financials", {})
     ri = obs.get("risk", {})
@@ -131,10 +102,7 @@ MARKET: Outlook={mk.get('sector_outlook')} | NPA={mk.get('sector_npa_rate', 0):.
     return out
 
 
-# ── LLM decision ──
-
-def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
-    """Returns a dict with decision, reasoning, confidence."""
+def _get_decision(llm, obs_data):
     prompt = _fmt_obs(obs_data)
     try:
         resp = llm.chat.completions.create(
@@ -149,6 +117,7 @@ def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
         )
         text = (resp.choices[0].message.content or "").strip()
 
+        # strip markdown fences if the model wraps json in them
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:
@@ -176,73 +145,56 @@ def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
         return {"decision": "reject", "reasoning": f"error: {e}", "confidence": 0.1}
 
 
-# ── Main ──
-
-async def main() -> None:
+async def main():
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-
-    # Use our lightweight Docker client (no openenv-core needed)
     env = await DockerEnvClient.from_docker_image(IMAGE_NAME, container_port=7860)
 
-    overall_rewards: List[float] = []
-    overall_steps = 0
+    all_rewards = []
+    total_steps = 0
     total_score = 0.0
 
     try:
         for task in TASKS:
-            rewards: List[float] = []
+            rewards = []
             steps = 0
-
             log_start(task=task, env=BENCHMARK, model=MODEL_NAME)
 
             try:
-                for ep in range(EPISODES_PER_TASK):
+                for _ in range(EPISODES_PER_TASK):
                     result = await env.reset(task_name=task)
                     obs = result.observation if isinstance(result.observation, dict) else {}
 
-                    action_data = _get_decision(client, obs)
-                    result = await env.step(action_data)
+                    action = _get_decision(client, obs)
+                    result = await env.step(action)
 
                     reward = max(0.0, min(1.0, float(result.reward or 0.0)))
-                    done = result.done
-                    error = result.last_action_error
-
                     rewards.append(reward)
                     steps += 1
 
                     log_step(
                         step=steps,
-                        action=f"{action_data['decision']}(conf={action_data['confidence']:.2f})",
+                        action=f"{action['decision']}(conf={action['confidence']:.2f})",
                         reward=reward,
-                        done=done,
-                        error=error,
+                        done=result.done,
+                        error=result.last_action_error,
                     )
-
             except Exception as e:
                 print(f"[DEBUG] {task} failed: {e}", file=sys.stderr, flush=True)
                 traceback.print_exc(file=sys.stderr)
 
-            task_score = sum(rewards) / len(rewards) if rewards else 0.0
-            task_score = max(0.0, min(1.0, task_score))
-            success = task_score >= SUCCESS_SCORE_THRESHOLD
-            log_end(success=success, steps=steps, score=task_score, rewards=rewards)
+            score = sum(rewards) / len(rewards) if rewards else 0.0
+            score = max(0.0, min(1.0, score))
+            log_end(success=score >= SUCCESS_THRESHOLD, steps=steps, score=score, rewards=rewards)
 
-            overall_rewards.extend(rewards)
-            overall_steps += steps
-            total_score += task_score
-
-        avg = total_score / len(TASKS) if TASKS else 0.0
-        print(
-            f"[SUMMARY] overall_score={max(0.0, min(1.0, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}",
-            file=sys.stderr,
-            flush=True,
-        )
+            all_rewards.extend(rewards)
+            total_steps += steps
+            total_score += score
 
     finally:
         try:
             await env.close()
-        except Exception as e:
-            print(f"[DEBUG] env.close() error: {e}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
