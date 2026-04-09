@@ -43,3 +43,4 @@ app:
     reset: /reset
     step: /step
     state: /state
+    health: /health

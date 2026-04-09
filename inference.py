@@ -3,6 +3,12 @@ Credit Approval Environment — Inference Script
 ================================================
 Uses OpenEnv SDK (from_docker_image) + OpenAI Client.
 Follows mandatory stdout format: [START] / [STEP] / [END].
+
+MANDATORY ENV VARS:
+    API_BASE_URL       The API endpoint for the LLM
+    MODEL_NAME         The model identifier
+    HF_TOKEN           Your HuggingFace / API key
+    IMAGE_NAME         Docker image name (set by evaluator)
 """
 
 import asyncio
@@ -31,13 +37,12 @@ def _ensure_installed(package_name: str, pip_name: str = None):
 
 _ensure_installed("openai", "openai>=1.0.0")
 _ensure_installed("openenv", "openenv-core>=0.1.0")
-_ensure_installed("httpx", "httpx>=0.28.0")
-_ensure_installed("pydantic", "pydantic>=2.10.0")
 
 from openai import OpenAI  # noqa: E402
 from openenv import GenericEnvClient, GenericAction  # noqa: E402
 
-IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")  # Docker image for from_docker_image()
+# ── Configuration from environment ──
+IMAGE_NAME = os.getenv("IMAGE_NAME")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
@@ -45,8 +50,10 @@ BENCHMARK = "credit_approval"
 
 TASKS = ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard"]
 EPISODES_PER_TASK = 3
+MAX_STEPS = 1  # Single-step environment
 TEMPERATURE = 0.3
 MAX_TOKENS = 500
+SUCCESS_SCORE_THRESHOLD = 0.3
 
 SYSTEM_PROMPT = textwrap.dedent("""\
     You are an expert credit analyst at a major Indian bank. You review corporate
@@ -72,14 +79,21 @@ def log_start(task: str, env: str, model: str) -> None:
 
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    err = error if error else "null"
+    error_val = error if error else "null"
+    done_val = str(done).lower()
     act = action.replace("\n", " ").replace("\r", "")[:200]
-    print(f"[STEP] step={step} action={act} reward={reward:.2f} done={str(done).lower()} error={err}", flush=True)
+    print(
+        f"[STEP] step={step} action={act} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
 
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    rstr = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rstr}", flush=True)
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
 
 
 # ── Observation formatting ──
@@ -124,8 +138,13 @@ def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
     try:
         resp = llm.chat.completions.create(
             model=MODEL_NAME,
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
-            temperature=TEMPERATURE, max_tokens=MAX_TOKENS, stream=False,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+            stream=False,
         )
         text = (resp.choices[0].message.content or "").strip()
 
@@ -152,33 +171,17 @@ def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
             dec = "conditional"
         return {"decision": dec, "reasoning": text or "parse error", "confidence": 0.3}
     except Exception as e:
-        print(f"[DEBUG] llm error: {e}", file=sys.stderr, flush=True)
+        print(f"[DEBUG] LLM error: {e}", file=sys.stderr, flush=True)
         return {"decision": "reject", "reasoning": f"error: {e}", "confidence": 0.1}
 
 
 # ── Main ──
 
 async def main() -> None:
-    # Validate required env vars early
-    if not API_KEY:
-        print("[ERROR] HF_TOKEN or API_KEY environment variable not set", file=sys.stderr, flush=True)
-        sys.exit(1)
-    if not IMAGE_NAME:
-        print("[ERROR] IMAGE_NAME or LOCAL_IMAGE_NAME environment variable not set", file=sys.stderr, flush=True)
-        sys.exit(1)
-
-    try:
-        llm = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    except Exception as e:
-        print(f"[ERROR] Failed to create OpenAI client: {e}", file=sys.stderr, flush=True)
-        sys.exit(1)
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     # Use OpenEnv SDK to spin up the environment from Docker image
-    try:
-        env = await GenericEnvClient.from_docker_image(IMAGE_NAME)
-    except Exception as e:
-        print(f"[ERROR] Failed to start environment from image '{IMAGE_NAME}': {e}", file=sys.stderr, flush=True)
-        sys.exit(1)
+    env = await GenericEnvClient.from_docker_image(IMAGE_NAME)
 
     overall_rewards: List[float] = []
     overall_steps = 0
@@ -186,42 +189,36 @@ async def main() -> None:
 
     try:
         for task in TASKS:
-            log_start(task, BENCHMARK, MODEL_NAME)
             rewards: List[float] = []
             steps = 0
 
+            log_start(task=task, env=BENCHMARK, model=MODEL_NAME)
+
             try:
                 for ep in range(EPISODES_PER_TASK):
-                    try:
-                        result = await env.reset(task_name=task)
-                        obs = result.observation if isinstance(result.observation, dict) else result.observation.dict()
-                    except Exception as e:
-                        print(f"[DEBUG] reset failed for {task} ep={ep}: {e}", file=sys.stderr, flush=True)
-                        continue
+                    result = await env.reset(task_name=task)
+                    obs = result.observation if isinstance(result.observation, dict) else result.observation.dict()
 
-                    try:
-                        action_data = _get_decision(llm, obs)
-                    except Exception as e:
-                        print(f"[DEBUG] decision failed for {task} ep={ep}: {e}", file=sys.stderr, flush=True)
-                        action_data = {"decision": "reject", "reasoning": f"decision error: {e}", "confidence": 0.1}
+                    action_data = _get_decision(client, obs)
+                    action = GenericAction(action_data)
 
-                    try:
-                        action = GenericAction(action_data)
-                        result = await env.step(action)
-                    except Exception as e:
-                        print(f"[DEBUG] step failed for {task} ep={ep}: {e}", file=sys.stderr, flush=True)
-                        # Log a zero-reward step so output parsing still works
-                        steps += 1
-                        rewards.append(0.0)
-                        log_step(steps, f"{action_data['decision']}(conf={action_data['confidence']:.2f})", 0.0, True, str(e))
-                        continue
+                    result = await env.step(action)
 
-                    reward = float(result.reward or 0.0)
-                    reward = max(0.0, min(1.0, reward))
+                    reward = result.reward or 0.0
+                    reward = max(0.0, min(1.0, float(reward)))
+                    done = result.done
+                    error = getattr(result, "last_action_error", None)
+
                     rewards.append(reward)
                     steps += 1
-                    error = getattr(result, "last_action_error", None)
-                    log_step(steps, f"{action_data['decision']}(conf={action_data['confidence']:.2f})", reward, result.done, error)
+
+                    log_step(
+                        step=steps,
+                        action=f"{action_data['decision']}(conf={action_data['confidence']:.2f})",
+                        reward=reward,
+                        done=done,
+                        error=error,
+                    )
 
             except Exception as e:
                 print(f"[DEBUG] {task} failed: {e}", file=sys.stderr, flush=True)
@@ -229,20 +226,25 @@ async def main() -> None:
 
             task_score = sum(rewards) / len(rewards) if rewards else 0.0
             task_score = max(0.0, min(1.0, task_score))
-            log_end(task_score >= 0.3, steps, task_score, rewards)
+            success = task_score >= SUCCESS_SCORE_THRESHOLD
+            log_end(success=success, steps=steps, score=task_score, rewards=rewards)
 
             overall_rewards.extend(rewards)
             overall_steps += steps
             total_score += task_score
 
         avg = total_score / len(TASKS) if TASKS else 0.0
-        print(f"[SUMMARY] overall_score={max(0.0, min(1.0, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}", file=sys.stderr, flush=True)
+        print(
+            f"[SUMMARY] overall_score={max(0.0, min(1.0, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     finally:
         try:
             await env.close()
         except Exception as e:
-            print(f"[DEBUG] env.close() error (container cleanup): {e}", file=sys.stderr, flush=True)
+            print(f"[DEBUG] env.close() error: {e}", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
