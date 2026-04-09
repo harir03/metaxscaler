@@ -10,10 +10,21 @@ import os
 import json
 import sys
 import textwrap
+import traceback
 from typing import List, Optional
 
-from openai import OpenAI
-from openenv import GenericEnvClient, GenericAction
+# ── Guarded imports with clear error messages ──
+try:
+    from openai import OpenAI
+except ImportError:
+    print("[ERROR] openai package not found. Install with: pip install openai>=1.0.0", file=sys.stderr, flush=True)
+    sys.exit(1)
+
+try:
+    from openenv import GenericEnvClient, GenericAction
+except ImportError:
+    print("[ERROR] openenv-core package not found. Install with: pip install openenv-core>=0.1.0", file=sys.stderr, flush=True)
+    sys.exit(1)
 
 IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")  # Docker image for from_docker_image()
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
@@ -113,10 +124,13 @@ def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
             text = text.split("```")[1].split("```")[0].strip()
 
         parsed = json.loads(text)
+        decision = str(parsed.get("decision", "reject")).lower().strip()
+        if decision not in ("approve", "reject", "conditional"):
+            decision = "reject"
         return {
-            "decision": parsed.get("decision", "reject"),
-            "reasoning": parsed.get("reasoning", ""),
-            "confidence": float(parsed.get("confidence", 0.5)),
+            "decision": decision,
+            "reasoning": str(parsed.get("reasoning", "")),
+            "confidence": max(0.0, min(1.0, float(parsed.get("confidence", 0.5)))),
         }
     except json.JSONDecodeError:
         low = (text or "").lower()
@@ -134,10 +148,26 @@ def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
 # ── Main ──
 
 async def main() -> None:
-    llm = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # Validate required env vars early
+    if not API_KEY:
+        print("[ERROR] HF_TOKEN or API_KEY environment variable not set", file=sys.stderr, flush=True)
+        sys.exit(1)
+    if not IMAGE_NAME:
+        print("[ERROR] IMAGE_NAME or LOCAL_IMAGE_NAME environment variable not set", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    try:
+        llm = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    except Exception as e:
+        print(f"[ERROR] Failed to create OpenAI client: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
 
     # Use OpenEnv SDK to spin up the environment from Docker image
-    env = await GenericEnvClient.from_docker_image(IMAGE_NAME)
+    try:
+        env = await GenericEnvClient.from_docker_image(IMAGE_NAME)
+    except Exception as e:
+        print(f"[ERROR] Failed to start environment from image '{IMAGE_NAME}': {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
 
     overall_rewards: List[float] = []
     overall_steps = 0
@@ -151,15 +181,32 @@ async def main() -> None:
 
             try:
                 for ep in range(EPISODES_PER_TASK):
-                    result = await env.reset(task_name=task)
-                    obs = result.observation if isinstance(result.observation, dict) else result.observation.dict()
+                    try:
+                        result = await env.reset(task_name=task)
+                        obs = result.observation if isinstance(result.observation, dict) else result.observation.dict()
+                    except Exception as e:
+                        print(f"[DEBUG] reset failed for {task} ep={ep}: {e}", file=sys.stderr, flush=True)
+                        continue
 
-                    action_data = _get_decision(llm, obs)
-                    action = GenericAction(action_data)
+                    try:
+                        action_data = _get_decision(llm, obs)
+                    except Exception as e:
+                        print(f"[DEBUG] decision failed for {task} ep={ep}: {e}", file=sys.stderr, flush=True)
+                        action_data = {"decision": "reject", "reasoning": f"decision error: {e}", "confidence": 0.1}
 
-                    result = await env.step(action)
+                    try:
+                        action = GenericAction(action_data)
+                        result = await env.step(action)
+                    except Exception as e:
+                        print(f"[DEBUG] step failed for {task} ep={ep}: {e}", file=sys.stderr, flush=True)
+                        # Log a zero-reward step so output parsing still works
+                        steps += 1
+                        rewards.append(0.0)
+                        log_step(steps, f"{action_data['decision']}(conf={action_data['confidence']:.2f})", 0.0, True, str(e))
+                        continue
 
-                    reward = result.reward or 0.0
+                    reward = float(result.reward or 0.0)
+                    reward = max(0.0, min(1.0, reward))
                     rewards.append(reward)
                     steps += 1
                     error = getattr(result, "last_action_error", None)
@@ -167,6 +214,7 @@ async def main() -> None:
 
             except Exception as e:
                 print(f"[DEBUG] {task} failed: {e}", file=sys.stderr, flush=True)
+                traceback.print_exc(file=sys.stderr)
 
             task_score = sum(rewards) / len(rewards) if rewards else 0.0
             task_score = max(0.0, min(1.0, task_score))
@@ -177,7 +225,7 @@ async def main() -> None:
             total_score += task_score
 
         avg = total_score / len(TASKS) if TASKS else 0.0
-        print(f"[SUMMARY] overall_score={max(0, min(1, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}", file=sys.stderr, flush=True)
+        print(f"[SUMMARY] overall_score={max(0.0, min(1.0, avg)):.2f} total_steps={overall_steps} tasks={len(TASKS)}", file=sys.stderr, flush=True)
 
     finally:
         try:

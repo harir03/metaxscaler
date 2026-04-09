@@ -35,10 +35,10 @@ tasks:
 
 runtime:
   type: docker
-  dockerfile: server/Dockerfile
+  dockerfile: Dockerfile
 
 app:
-  port: 8000
+  port: 7860
   endpoints:
     reset: /reset
     step: /step

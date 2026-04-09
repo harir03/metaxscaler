@@ -2,6 +2,8 @@
 .git
 .github
 .vscode
+.claude
+.code-review-graph
 .venv
 .venv-*
 venv
@@ -12,6 +14,7 @@ tests/
 docs/
 data/
 documents/
+tasks/
 *.log
 *.png
 *.svg
@@ -23,3 +26,9 @@ __pycache__
 .env.*
 !.env.example
 outputs/
+uv.lock
+.cursorrules
+.windsurfrules
+AGENTS.md
+CLAUDE.md
+GEMINI.md
