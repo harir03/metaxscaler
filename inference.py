@@ -8,23 +8,34 @@ Follows mandatory stdout format: [START] / [STEP] / [END].
 import asyncio
 import os
 import json
+import subprocess
 import sys
 import textwrap
 import traceback
 from typing import List, Optional
 
-# ── Guarded imports with clear error messages ──
-try:
-    from openai import OpenAI
-except ImportError:
-    print("[ERROR] openai package not found. Install with: pip install openai>=1.0.0", file=sys.stderr, flush=True)
-    sys.exit(1)
 
-try:
-    from openenv import GenericEnvClient, GenericAction
-except ImportError:
-    print("[ERROR] openenv-core package not found. Install with: pip install openenv-core>=0.1.0", file=sys.stderr, flush=True)
-    sys.exit(1)
+# ── Auto-install missing dependencies ──
+def _ensure_installed(package_name: str, pip_name: str = None):
+    """Install a package if it's not already available."""
+    pip_name = pip_name or package_name
+    try:
+        __import__(package_name)
+    except ImportError:
+        print(f"[SETUP] Installing {pip_name}...", file=sys.stderr, flush=True)
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--quiet", pip_name],
+            stdout=subprocess.DEVNULL,
+        )
+
+
+_ensure_installed("openai", "openai>=1.0.0")
+_ensure_installed("openenv", "openenv-core>=0.1.0")
+_ensure_installed("httpx", "httpx>=0.28.0")
+_ensure_installed("pydantic", "pydantic>=2.10.0")
+
+from openai import OpenAI  # noqa: E402
+from openenv import GenericEnvClient, GenericAction  # noqa: E402
 
 IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")  # Docker image for from_docker_image()
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
