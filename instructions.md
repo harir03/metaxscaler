@@ -45,8 +45,9 @@ git push hf main       # HuggingFace Space (the evaluator reads from HERE)
 - These MUST match. The SDK reads the port from openenv.yaml.
 
 ### 4. inference.py runs OUTSIDE the container
-- It self-installs its deps (openai, openenv-core) at runtime
-- It uses `GenericEnvClient.from_docker_image(IMAGE_NAME)`
+- It self-installs `openai` at runtime (~5s, lightweight)
+- It uses the local `env_client.py` module (`DockerEnvClient`) — NOT openenv-core
+- `openenv-core` is BANNED from inference — it pulls in gradio/numpy/pandas (600MB+, 60s+ install)
 - IMAGE_NAME is set by the evaluator (ECR image URL)
 - DO NOT use `LOCAL_IMAGE_NAME` — the evaluator doesn't set it
 
@@ -81,12 +82,16 @@ curl -X POST http://localhost:7860/step -H "Content-Type: application/json" -d '
 
 # 4. Check image size (must be < 300MB)
 docker images credit-approval-env
+
+# 5. Run integration test
+python tests/test_integration.py
 ```
 
 ### Code Quality Check
 - [ ] `inference.py` parses without errors: `python -c "import ast; ast.parse(open('inference.py').read())"`
+- [ ] `env_client.py` parses without errors
 - [ ] `openenv.yaml` port matches Dockerfile
-- [ ] No `openai` or `openenv-core` in server/requirements.txt
+- [ ] No `openai` or `openenv-core` in server/requirements.txt OR Dockerfile
 - [ ] All 3 tasks defined in openenv.yaml
 - [ ] `[START]`, `[STEP]`, `[END]` format matches spec exactly
 
@@ -94,7 +99,8 @@ docker images credit-approval-env
 | File Changed | Check These |
 |---|---|
 | `Dockerfile` | openenv.yaml port, server/requirements.txt, .dockerignore |
-| `inference.py` | stdout format, env var names, GenericEnvClient usage |
+| `inference.py` | stdout format, env var names, env_client usage |
+| `env_client.py` | inference.py imports, port default |
 | `openenv.yaml` | Dockerfile port, runtime.dockerfile path |
 | `server/app.py` | models.py imports, endpoint paths |
 | `models.py` | server/app.py, server/environment.py, client.py |
@@ -116,8 +122,9 @@ docker images credit-approval-env
 
 | Pitfall | Fix |
 |---|---|
-| `ModuleNotFoundError: openai` | inference.py self-installs deps at top |
-| Container timeout (30s) | Keep Dockerfile lean, no heavy deps |
+| `ModuleNotFoundError: openai` | inference.py self-installs openai at top |
+| openenv-core install timeout | DON'T use openenv-core — use local `env_client.py` |
+| Container timeout (30s) | Keep Dockerfile lean, no heavy deps, image < 300MB |
 | Port mismatch | openenv.yaml port == Dockerfile port |
-| Pushing only to GitHub | The evaluator reads from HuggingFace Space |
+| Pushing only to GitHub | The evaluator reads from HuggingFace Space — push to BOTH |
 | IMAGE_NAME vs LOCAL_IMAGE_NAME | Evaluator sets `IMAGE_NAME`, not `LOCAL_IMAGE_NAME` |
