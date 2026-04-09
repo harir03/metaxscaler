@@ -77,7 +77,7 @@ def grade_easy(decision, reasoning, confidence, ground_truth_decision, **kw) -> 
 
     total = 0.70 * d + 0.15 * r + 0.15 * c
     return {
-        "score": round(min(max(total, 0.0), 1.0), 4),
+        "score": round(min(max(total, 0.01), 0.99), 4),
         "breakdown": {"decision_score": round(d, 4), "reasoning_score": round(r, 4),
                       "confidence_score": round(c, 4)},
         "weights": {"decision": 0.70, "reasoning": 0.15, "confidence": 0.15},
@@ -91,7 +91,7 @@ def grade_medium(decision, reasoning, confidence, ground_truth_decision, **kw) -
 
     total = 0.50 * d + 0.30 * r + 0.20 * c
     return {
-        "score": round(min(max(total, 0.0), 1.0), 4),
+        "score": round(min(max(total, 0.01), 0.99), 4),
         "breakdown": {"decision_score": round(d, 4), "reasoning_score": round(r, 4),
                       "confidence_score": round(c, 4)},
         "weights": {"decision": 0.50, "reasoning": 0.30, "confidence": 0.20},
@@ -114,7 +114,7 @@ def grade_hard(decision, reasoning, confidence, ground_truth_decision, **kw) -> 
 
     total = 0.40 * d + 0.40 * r + 0.20 * c + fraud_bonus
     return {
-        "score": round(min(max(total, 0.0), 1.0), 4),
+        "score": round(min(max(total, 0.01), 0.99), 4),
         "breakdown": {
             "decision_score": round(d, 4), "reasoning_score": round(r, 4),
             "confidence_score": round(c, 4), "fraud_detection_bonus": round(fraud_bonus, 4),
