@@ -1,7 +1,7 @@
 """
 Credit Approval Environment — Inference Script
 ================================================
-Uses OpenEnv SDK (from_docker_image) + OpenAI Client.
+Uses local DockerEnvClient (no openenv-core needed) + OpenAI Client.
 Follows mandatory stdout format: [START] / [STEP] / [END].
 
 MANDATORY ENV VARS:
@@ -21,7 +21,7 @@ import traceback
 from typing import List, Optional
 
 
-# ── Auto-install missing dependencies ──
+# ── Auto-install openai (lightweight, ~5s) ──
 def _ensure_installed(package_name: str, pip_name: str = None):
     """Install a package if it's not already available."""
     pip_name = pip_name or package_name
@@ -30,16 +30,18 @@ def _ensure_installed(package_name: str, pip_name: str = None):
     except ImportError:
         print(f"[SETUP] Installing {pip_name}...", file=sys.stderr, flush=True)
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", pip_name],
+            [sys.executable, "-m", "pip", "install", "--quiet",
+             "--root-user-action=ignore", pip_name],
             stdout=subprocess.DEVNULL,
         )
 
 
 _ensure_installed("openai", "openai>=1.0.0")
-_ensure_installed("openenv", "openenv-core>=0.1.0")
 
 from openai import OpenAI  # noqa: E402
-from openenv import GenericEnvClient, GenericAction  # noqa: E402
+
+# Local lightweight client — NO openenv-core dependency
+from env_client import DockerEnvClient  # noqa: E402
 
 # ── Configuration from environment ──
 IMAGE_NAME = os.getenv("IMAGE_NAME")
@@ -50,7 +52,6 @@ BENCHMARK = "credit_approval"
 
 TASKS = ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard"]
 EPISODES_PER_TASK = 3
-MAX_STEPS = 1  # Single-step environment
 TEMPERATURE = 0.3
 MAX_TOKENS = 500
 SUCCESS_SCORE_THRESHOLD = 0.3
@@ -180,8 +181,8 @@ def _get_decision(llm: OpenAI, obs_data: dict) -> dict:
 async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    # Use OpenEnv SDK to spin up the environment from Docker image
-    env = await GenericEnvClient.from_docker_image(IMAGE_NAME)
+    # Use our lightweight Docker client (no openenv-core needed)
+    env = await DockerEnvClient.from_docker_image(IMAGE_NAME, container_port=7860)
 
     overall_rewards: List[float] = []
     overall_steps = 0
@@ -197,17 +198,14 @@ async def main() -> None:
             try:
                 for ep in range(EPISODES_PER_TASK):
                     result = await env.reset(task_name=task)
-                    obs = result.observation if isinstance(result.observation, dict) else result.observation.dict()
+                    obs = result.observation if isinstance(result.observation, dict) else {}
 
                     action_data = _get_decision(client, obs)
-                    action = GenericAction(action_data)
+                    result = await env.step(action_data)
 
-                    result = await env.step(action)
-
-                    reward = result.reward or 0.0
-                    reward = max(0.0, min(1.0, float(reward)))
+                    reward = max(0.0, min(1.0, float(result.reward or 0.0)))
                     done = result.done
-                    error = getattr(result, "last_action_error", None)
+                    error = result.last_action_error
 
                     rewards.append(reward)
                     steps += 1
