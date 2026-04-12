@@ -90,7 +90,7 @@ async def health():
 
 @app.get("/")
 async def root():
-    return {"service": "Credit Approval Environment", "version": "1.0.0",
+    return {"service": "Credit Approval Environment", "version": "1.1.0",
             "endpoints": {"reset": "POST /reset", "step": "POST /step",
                         "state": "GET /state", "health": "GET /health"},
             "tasks": ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard"]}
