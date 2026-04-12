@@ -178,7 +178,9 @@ def _make_medium():
     return obs, gt_decision, gt_score, reason
 
 
-def _make_hard():
+# --- hard task variants (S3: mixed ground truths) ---
+
+def _make_hard_reject():
     """Profiles that look good on paper but have buried red flags."""
     company = CompanyProfile(
         name=_rand_name(), sector=random.choice(SECTORS),
@@ -280,6 +282,97 @@ def _make_hard():
         step=1, task_name="credit-approval-hard", difficulty="hard",
     )
     return obs, "reject", random.randint(150, 350), reason
+
+
+def _make_hard_approve():
+    """Looks sketchy on the surface but fundamentals are actually solid."""
+    company = CompanyProfile(
+        name=_rand_name(), sector=random.choice(SECTORS),
+        incorporation_year=random.randint(1980, 2005),
+        annual_turnover_cr=round(random.uniform(500, 5000), 2),
+        loan_type=random.choice(LOAN_TYPES),
+        loan_amount_cr=round(random.uniform(30, 200), 2),
+    )
+    # strong numbers hidden behind yellow flags that aren't dealbreakers
+    fin = FinancialMetrics(
+        dscr=round(random.uniform(2.0, 3.5), 2),
+        current_ratio=round(random.uniform(1.6, 2.8), 2),
+        debt_equity_ratio=round(random.uniform(0.3, 0.8), 2),
+        net_profit_margin=round(random.uniform(10.0, 20.0), 2),
+        revenue_growth_yoy=round(random.uniform(8.0, 25.0), 2),
+        interest_coverage_ratio=round(random.uniform(3.5, 7.0), 2),
+        working_capital_days=random.randint(40, 80),
+        cash_flow_positive=True,
+    )
+    risk = RiskIndicators(
+        credit_rating=random.choice(_MID_RATINGS),  # BBB looks mediocre
+        gst_compliance_pct=round(random.uniform(85.0, 93.0), 1),
+        related_party_transactions_flagged=True,  # flagged but manageable
+        audit_qualifications=1,
+        promoter_pledge_pct=round(random.uniform(20.0, 35.0), 1),
+    )
+    mkt = MarketContext(
+        sector_outlook=random.choice(["positive", "neutral"]),
+        sector_npa_rate=round(random.uniform(2.0, 5.0), 2),
+        gdp_growth_relevant=round(random.uniform(5.0, 7.5), 2),
+        regulatory_risk="low",
+    )
+    obs = CreditObservation(
+        company=company, financials=fin, risk=risk, market=mkt,
+        step=1, task_name="credit-approval-hard", difficulty="hard",
+    )
+    return obs, "approve", random.randint(600, 750), \
+        "Strong fundamentals despite surface yellow flags — BBB rating but excellent DSCR and margins"
+
+
+def _make_hard_conditional():
+    """Tricky borderline — salvageable with conditions but easy to misjudge."""
+    company = CompanyProfile(
+        name=_rand_name(), sector=random.choice(SECTORS),
+        incorporation_year=random.randint(2005, 2018),
+        annual_turnover_cr=round(random.uniform(100, 800), 2),
+        loan_type=random.choice(LOAN_TYPES),
+        loan_amount_cr=round(random.uniform(40, 250), 2),
+    )
+    fin = FinancialMetrics(
+        dscr=round(random.uniform(1.3, 1.8), 2),
+        current_ratio=round(random.uniform(1.2, 1.6), 2),
+        debt_equity_ratio=round(random.uniform(1.0, 1.8), 2),
+        net_profit_margin=round(random.uniform(5.0, 10.0), 2),
+        revenue_growth_yoy=round(random.uniform(10.0, 25.0), 2),
+        interest_coverage_ratio=round(random.uniform(2.0, 3.0), 2),
+        working_capital_days=random.randint(60, 120),
+        cash_flow_positive=True,
+    )
+    risk = RiskIndicators(
+        credit_rating=random.choice(_MID_RATINGS),
+        gst_compliance_pct=round(random.uniform(80.0, 92.0), 1),
+        related_party_transactions_flagged=True,
+        audit_qualifications=random.randint(1, 2),
+        promoter_pledge_pct=round(random.uniform(25.0, 45.0), 1),
+    )
+    mkt = MarketContext(
+        sector_outlook="neutral",
+        sector_npa_rate=round(random.uniform(4.0, 8.0), 2),
+        gdp_growth_relevant=round(random.uniform(4.0, 6.0), 2),
+        regulatory_risk="medium",
+    )
+    obs = CreditObservation(
+        company=company, financials=fin, risk=risk, market=mkt,
+        step=1, task_name="credit-approval-hard", difficulty="hard",
+    )
+    return obs, "conditional", random.randint(450, 600), \
+        "Decent financials but RPT and pledge concerns need monitoring terms"
+
+
+def _make_hard():
+    r = random.random()
+    if r < 0.55:
+        return _make_hard_reject()
+    elif r < 0.80:
+        return _make_hard_approve()
+    else:
+        return _make_hard_conditional()
 
 
 def generate_task(task_name: str) -> Tuple[CreditObservation, str, int, str]:

@@ -16,10 +16,11 @@ class Decision(str, Enum):
 
 
 class CreditAction(BaseModel):
-    decision: str = Field(..., description="approve, reject, or conditional")
+    decision: Optional[str] = Field(default=None, description="approve, reject, or conditional")
     reasoning: str = Field(default="")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     suggested_terms: Optional[str] = None
+    request: Optional[str] = None  # "risk_data" or "market_data"
 
 
 class CompanyProfile(BaseModel):
@@ -43,21 +44,21 @@ class FinancialMetrics(BaseModel):
 
 
 class RiskIndicators(BaseModel):
-    credit_rating: str
+    credit_rating: str = "not disclosed"
     wilful_defaulter: bool = False
     active_criminal_case: bool = False
     nclt_active: bool = False
-    gst_compliance_pct: float = Field(default=100.0, ge=0.0, le=100.0)
+    gst_compliance_pct: float = Field(default=0.0, ge=0.0, le=100.0)
     related_party_transactions_flagged: bool = False
     audit_qualifications: int = 0
     promoter_pledge_pct: float = Field(default=0.0, ge=0.0, le=100.0)
 
 
 class MarketContext(BaseModel):
-    sector_outlook: str   # positive / neutral / negative
-    sector_npa_rate: float
-    gdp_growth_relevant: float
-    regulatory_risk: str  # low / medium / high
+    sector_outlook: str = "not disclosed"
+    sector_npa_rate: float = 0.0
+    gdp_growth_relevant: float = 0.0
+    regulatory_risk: str = "not disclosed"
 
 
 class CreditObservation(BaseModel):
@@ -80,7 +81,7 @@ class CreditState(BaseModel):
     ground_truth_decision: str = ""
     ground_truth_score: int = 0
     company_name: str = ""
-    max_steps: int = 1
+    max_steps: int = 3
 
 
 class EnvResult(BaseModel):

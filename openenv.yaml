@@ -1,11 +1,12 @@
 # Credit Approval Environment — OpenEnv Manifest
 name: credit_approval
-version: "1.0.0"
+version: "1.1.0"
 description: >
-  AI-powered credit approval RL environment. An agent reviews corporate loan
-  applications with realistic financial profiles, risk indicators, and market
-  context, then makes approve/reject/conditional decisions. Features 3 difficulty
-  levels with deterministic grading including fraud detection bonuses.
+  Multi-step RL environment for credit approval. An agent reviews corporate
+  loan applications with progressive data disclosure — starting with company
+  and financial data, then optionally requesting risk indicators and market
+  context before making a final decision. Features 3 difficulty levels with
+  mixed ground truths and structural reasoning evaluation.
 
 spec_version: 1
 
@@ -26,11 +27,11 @@ tasks:
 
   - name: credit-approval-hard
     description: >
-      Adversarial profiles that look good on the surface but contain hidden
-      fraud patterns — wilful defaulter flags despite excellent financials,
-      revenue inflation (high growth but negative cash flow), circular
-      trading indicators, or evergreening with active NCLT proceedings.
-      Rewards agents that detect and articulate specific fraud patterns.
+      Adversarial profiles with mixed ground truths. Some look good but
+      contain hidden fraud patterns (wilful defaulter, revenue inflation,
+      circular trading, evergreening). Others look sketchy but are actually
+      creditworthy. Rewards agents that gather info, cite specific values,
+      and detect or dismiss fraud patterns correctly.
     grader: server.graders:grade_hard
 
 runtime:

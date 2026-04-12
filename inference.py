@@ -52,6 +52,8 @@ SYSTEM_PROMPT = textwrap.dedent("""\
     - Hard blocks (wilful defaulter, NCLT, criminal cases) -> always reject
     - Watch for fraud: unrealistic growth + low margins, RPT flags, high pledge %
     - Revenue inflation: high growth but negative cash flow is suspicious
+    - If data shows "not disclosed", note that in your reasoning
+    - Cite specific metric values (e.g. "DSCR of 2.3") in your reasoning
     Be thorough. Mention specific metrics.""")
 
 
@@ -163,6 +165,20 @@ async def main():
                 for _ in range(EPISODES_PER_TASK):
                     result = await env.reset(task_name=task)
                     obs = result.observation if isinstance(result.observation, dict) else {}
+                    info = result.info if isinstance(result.info, dict) else {}
+
+                    # gather hidden data before deciding
+                    hidden = info.get("hidden", [])
+                    for cat in hidden:
+                        req_key = f"{cat}_data" if not cat.endswith("_data") else cat
+                        result = await env.step({"request": req_key})
+                        obs = result.observation if isinstance(result.observation, dict) else obs
+                        steps += 1
+                        log_step(
+                            step=steps,
+                            action=f"request({req_key})",
+                            reward=0.0, done=False, error=None,
+                        )
 
                     action = _get_decision(client, obs)
                     result = await env.step(action)
