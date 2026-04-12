@@ -48,7 +48,7 @@ class RiskIndicators(BaseModel):
     wilful_defaulter: bool = False
     active_criminal_case: bool = False
     nclt_active: bool = False
-    gst_compliance_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    gst_compliance_pct: float = Field(default=50.0, ge=0.0, le=100.0)
     related_party_transactions_flagged: bool = False
     audit_qualifications: int = 0
     promoter_pledge_pct: float = Field(default=0.0, ge=0.0, le=100.0)

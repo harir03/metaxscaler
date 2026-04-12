@@ -19,6 +19,25 @@ VALID_TASKS = [
 
 VALID_REQUESTS = {"risk_data", "market_data"}
 
+# neutral placeholders that don't trigger false signals
+_MASKED_RISK = {
+    "credit_rating": "not disclosed",
+    "wilful_defaulter": False,
+    "active_criminal_case": False,
+    "nclt_active": False,
+    "gst_compliance_pct": 50.0,  # neutral midpoint, not 0 (alarming) or 100 (clean)
+    "related_party_transactions_flagged": False,
+    "audit_qualifications": 0,
+    "promoter_pledge_pct": 0.0,
+}
+
+_MASKED_MARKET = {
+    "sector_outlook": "not disclosed",
+    "sector_npa_rate": 0.0,
+    "gdp_growth_relevant": 0.0,
+    "regulatory_risk": "not disclosed",
+}
+
 
 class CreditApprovalEnvironment:
     """Single or multi-step RL env. Agent sees financial data, optionally
@@ -31,6 +50,7 @@ class CreditApprovalEnvironment:
         self._gt_decision = ""
         self._gt_score = 0
         self._gt_reason = ""
+        self._cached_base = None  # cached model_dump of full obs
 
     def reset(self, task_name="credit-approval-easy"):
         if task_name not in VALID_TASKS:
@@ -48,17 +68,14 @@ class CreditApprovalEnvironment:
             max_steps=3,
         )
         self._full_obs = obs
+        self._cached_base = obs.model_dump()  # serialize once
         self._revealed = {"company", "financials"}
         self._gt_decision = gt_dec
         self._gt_score = gt_score
         self._gt_reason = gt_reason
 
+        hidden = self._get_hidden()
         masked = self._mask_obs()
-        hidden = []
-        if "risk_data" not in self._revealed:
-            hidden.append("risk")
-        if "market_data" not in self._revealed:
-            hidden.append("market")
 
         return EnvResult(
             observation=masked, reward=0.0, done=False,
@@ -88,12 +105,8 @@ class CreditApprovalEnvironment:
         self._state.step += 1
         self._revealed.add(category)
 
+        hidden = self._get_hidden()
         masked = self._mask_obs()
-        hidden = []
-        if "risk_data" not in self._revealed:
-            hidden.append("risk")
-        if "market_data" not in self._revealed:
-            hidden.append("market")
 
         return EnvResult(
             observation=masked, reward=0.0, done=False,
@@ -115,15 +128,13 @@ class CreditApprovalEnvironment:
         self._state.step += 1
         self._state.done = True
 
-        obs_dict = self._full_obs.model_dump() if self._full_obs else {}
-
         result = grade(
             task_name=self._state.task_name,
             decision=action.decision,
             reasoning=action.reasoning,
             confidence=action.confidence,
             ground_truth_decision=self._gt_decision,
-            observation=obs_dict,
+            observation=self._cached_base,
             steps_taken=self._state.step,
         )
 
@@ -138,9 +149,6 @@ class CreditApprovalEnvironment:
                 "episode_id": self._state.episode_id,
                 "grade_breakdown": result["breakdown"],
                 "grade_weights": result["weights"],
-                "ground_truth_decision": self._gt_decision,
-                "ground_truth_score": self._gt_score,
-                "ground_truth_reason": self._gt_reason,
                 "agent_decision": action.decision,
                 "agent_reasoning_length": len(action.reasoning),
                 "steps_taken": self._state.step,
@@ -148,12 +156,20 @@ class CreditApprovalEnvironment:
             },
         )
 
-    def _mask_obs(self):
-        data = self._full_obs.model_dump()
+    def _get_hidden(self):
+        hidden = []
         if "risk_data" not in self._revealed:
-            data["risk"] = RiskIndicators().model_dump()
+            hidden.append("risk")
         if "market_data" not in self._revealed:
-            data["market"] = MarketContext().model_dump()
+            hidden.append("market")
+        return hidden
+
+    def _mask_obs(self):
+        data = dict(self._cached_base)  # shallow copy of cached dict
+        if "risk_data" not in self._revealed:
+            data["risk"] = dict(_MASKED_RISK)
+        if "market_data" not in self._revealed:
+            data["market"] = dict(_MASKED_MARKET)
         return CreditObservation(**data)
 
     def state(self):
@@ -164,4 +180,5 @@ class CreditApprovalEnvironment:
     def close(self):
         self._state = None
         self._full_obs = None
+        self._cached_base = None
         self._revealed = set()

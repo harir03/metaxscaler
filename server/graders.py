@@ -148,7 +148,8 @@ def grade_easy(decision, reasoning, confidence, ground_truth_decision, **kw) -> 
     c = _confidence_score(confidence, d >= 0.5, "easy")
     ib = _info_bonus(steps)
 
-    total = 0.70 * d + 0.15 * r + 0.15 * c + ib
+    raw = 0.70 * d + 0.15 * r + 0.15 * c + ib
+    total = raw / (1.0 + 0.10)  # normalize: max raw is 1.10
     return {
         "score": round(min(max(total, 0.01), 0.99), 4),
         "breakdown": {"decision_score": round(d, 4), "reasoning_score": round(r, 4),
@@ -167,7 +168,8 @@ def grade_medium(decision, reasoning, confidence, ground_truth_decision, **kw) -
     c = _confidence_score(confidence, d >= 0.5, "medium")
     ib = _info_bonus(steps)
 
-    total = 0.50 * d + 0.30 * r + 0.20 * c + ib
+    raw = 0.50 * d + 0.30 * r + 0.20 * c + ib
+    total = raw / (1.0 + 0.10)  # normalize: max raw is 1.10
     return {
         "score": round(min(max(total, 0.01), 0.99), 4),
         "breakdown": {"decision_score": round(d, 4), "reasoning_score": round(r, 4),
@@ -195,7 +197,8 @@ def grade_hard(decision, reasoning, confidence, ground_truth_decision, **kw) -> 
     low = reasoning.lower()
     fraud_bonus = min(sum(1 for kw in fraud_kw if kw in low) * 0.05, 0.15)
 
-    total = 0.40 * d + 0.40 * r + 0.20 * c + fraud_bonus + ib
+    raw = 0.40 * d + 0.40 * r + 0.20 * c + fraud_bonus + ib
+    total = raw / (1.0 + 0.15 + 0.10)  # normalize: max raw is 1.25
     return {
         "score": round(min(max(total, 0.01), 0.99), 4),
         "breakdown": {

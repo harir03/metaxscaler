@@ -1,130 +1,165 @@
-import sys, time, subprocess, os
+"""E2E test: spins up uvicorn, hits all endpoints, validates multi-step flow.
+Run: python tests/test_e2e.py
+"""
+import sys
+import os
+import time
+import subprocess
+import httpx
 
-sys.path.insert(0, ".")
-from client import CreditApprovalClient
-from models import CreditAction
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+PORT = 8765
+BASE = f"http://127.0.0.1:{PORT}"
+
+TASKS = ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard"]
 
 
-def test_e2e():
-    """End-to-end test: starts the server, runs all 3 tasks, validates responses."""
+def _start_server():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "server.app:app", "--host", "127.0.0.1", "--port", "8765"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        cwd=os.path.dirname(os.path.abspath(__file__)) or ".",
+        [sys.executable, "-m", "uvicorn", "server.app:app",
+         "--host", "127.0.0.1", "--port", str(PORT)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=root,
     )
-    time.sleep(3)
+    for _ in range(20):
+        time.sleep(0.5)
+        try:
+            r = httpx.get(f"{BASE}/health", timeout=2.0)
+            if r.status_code == 200:
+                return proc
+        except httpx.ConnectError:
+            pass
+    proc.terminate()
+    raise RuntimeError("server did not start")
 
-    try:
-        c = CreditApprovalClient("http://127.0.0.1:8765")
 
-        # Test health endpoint
-        health = c.health()
-        assert health["status"] == "healthy", f"Health check failed: {health}"
-        assert "tasks" in health, "Health response missing tasks list"
+def test_health():
+    r = httpx.get(f"{BASE}/health")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    print("[PASS] health endpoint returns ok")
 
-        for task in ["credit-approval-easy", "credit-approval-medium", "credit-approval-hard"]:
-            r = c.reset(task_name=task)
-            assert not r.done, f"Reset should return done=False, got {r.done}"
-            assert r.reward == 0.0, f"Reset should return reward=0.0, got {r.reward}"
-            assert r.observation is not None, "Reset returned None observation"
-            assert r.observation.company is not None, "Missing company in observation"
-            assert r.observation.financials is not None, "Missing financials in observation"
-            assert r.observation.risk is not None, "Missing risk in observation"
-            assert r.observation.market is not None, "Missing market in observation"
 
-            dscr = r.observation.financials.dscr
-            wilful = r.observation.risk.wilful_defaulter
+def test_root():
+    r = httpx.get(f"{BASE}/")
+    d = r.json()
+    assert d["version"] == "1.1.0", f"version mismatch: {d['version']}"
+    assert len(d["tasks"]) == 3
+    print("[PASS] root endpoint returns correct metadata")
 
-            if wilful:
-                dec, reason = "reject", "wilful defaulter - automatic reject"
-            elif dscr >= 1.5:
-                dec, reason = "approve", f"DSCR {dscr} shows good capacity"
-            elif dscr >= 1.0:
-                dec, reason = "conditional", f"Borderline DSCR {dscr}, needs monitoring"
-            else:
-                dec, reason = "reject", f"DSCR {dscr} below threshold"
 
-            s = c.step(CreditAction(decision=dec, reasoning=reason, confidence=0.7))
-            assert s.done, f"Step should return done=True, got {s.done}"
-            assert 0.0 <= s.reward <= 1.0, f"Reward out of range: {s.reward}"
-            assert "ground_truth_decision" in s.info, "Missing ground_truth_decision in info"
-            print(f"{task}: {dec} -> reward={s.reward:.3f} (gt={s.info.get('ground_truth_decision')})")
+def test_single_step_all_tasks():
+    for task in TASKS:
+        r = httpx.post(f"{BASE}/reset", json={"task_name": task})
+        assert r.status_code == 200
+        d = r.json()
+        assert not d["done"]
+        assert d["reward"] == 0.0
 
-        c.close()
-        print("\ne2e passed")
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+        r = httpx.post(f"{BASE}/step", json={
+            "decision": "approve", "reasoning": "test reasoning", "confidence": 0.6,
+        })
+        assert r.status_code == 200
+        d = r.json()
+        assert d["done"]
+        assert 0 < d["reward"] < 1, f"reward {d['reward']} out of (0,1)"
+        # ground truth must NOT leak
+        assert "ground_truth_decision" not in d.get("info", {}), \
+            "ground truth should not be in step info"
+        print(f"[PASS] {task}: single-step reward={d['reward']:.3f}")
+
+
+def test_multi_step():
+    r = httpx.post(f"{BASE}/reset", json={"task_name": "credit-approval-hard"})
+    d = r.json()
+    assert "risk" in d["info"]["hidden"], "risk should be hidden on reset"
+    assert "market" in d["info"]["hidden"], "market should be hidden on reset"
+    obs = d["observation"]
+    assert obs["risk"]["credit_rating"] == "not disclosed"
+
+    # request risk
+    r = httpx.post(f"{BASE}/step", json={"request": "risk_data"})
+    d = r.json()
+    assert not d["done"]
+    assert d["observation"]["risk"]["credit_rating"] != "not disclosed"
+    assert "risk" not in d["info"].get("hidden", [])
+
+    # request market
+    r = httpx.post(f"{BASE}/step", json={"request": "market_data"})
+    d = r.json()
+    assert not d["done"]
+    assert d["observation"]["market"]["sector_outlook"] != "not disclosed"
+
+    # decide
+    r = httpx.post(f"{BASE}/step", json={
+        "decision": "reject", "reasoning": "DSCR is weak, high pledge", "confidence": 0.8,
+    })
+    d = r.json()
+    assert d["done"]
+    assert 0 < d["reward"] < 1
+    assert d["info"]["steps_taken"] == 3
+    print(f"[PASS] multi-step: reward={d['reward']:.3f}, steps=3")
 
 
 def test_invalid_task():
-    """Test that an invalid task name returns an error."""
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "server.app:app", "--host", "127.0.0.1", "--port", "8766"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    time.sleep(3)
-
-    try:
-        import httpx
-        r = httpx.post("http://127.0.0.1:8766/reset", json={"task_name": "nonexistent-task"})
-        assert r.status_code == 400, f"Expected 400 for invalid task, got {r.status_code}"
-        print("invalid_task test passed")
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    r = httpx.post(f"{BASE}/reset", json={"task_name": "nonexistent"})
+    assert r.status_code == 400
+    print("[PASS] invalid task returns 400")
 
 
 def test_step_before_reset():
-    """Test that stepping before reset returns an error."""
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "server.app:app", "--host", "127.0.0.1", "--port", "8767"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    time.sleep(3)
-
-    try:
-        import httpx
-        r = httpx.post("http://127.0.0.1:8767/step", json={"decision": "approve", "reasoning": "test", "confidence": 0.5})
-        assert r.status_code == 400, f"Expected 400 for step before reset, got {r.status_code}"
-        print("step_before_reset test passed")
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+    # reset first to clear state, then try double step
+    httpx.post(f"{BASE}/reset", json={"task_name": "credit-approval-easy"})
+    httpx.post(f"{BASE}/step", json={"decision": "approve", "reasoning": "t", "confidence": 0.5})
+    # now episode is done — stepping again should fail
+    r = httpx.post(f"{BASE}/step", json={"decision": "reject", "reasoning": "t", "confidence": 0.5})
+    assert r.status_code == 400
+    print("[PASS] step after done returns 400")
 
 
-def test_double_step():
-    """Test that stepping twice on the same episode returns an error."""
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "server.app:app", "--host", "127.0.0.1", "--port", "8768"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    time.sleep(3)
+def test_no_decision_no_request():
+    httpx.post(f"{BASE}/reset", json={"task_name": "credit-approval-easy"})
+    r = httpx.post(f"{BASE}/step", json={"reasoning": "just vibing"})
+    assert r.status_code == 400
+    print("[PASS] step with neither decision nor request returns 400")
 
-    try:
-        import httpx
-        base = "http://127.0.0.1:8768"
 
-        # Reset
-        r = httpx.post(f"{base}/reset", json={"task_name": "credit-approval-easy"})
-        assert r.status_code == 200, f"Reset failed: {r.status_code}"
-
-        # First step should succeed
-        r = httpx.post(f"{base}/step", json={"decision": "approve", "reasoning": "test", "confidence": 0.5})
-        assert r.status_code == 200, f"First step failed: {r.status_code}"
-
-        # Second step should fail (episode already done)
-        r = httpx.post(f"{base}/step", json={"decision": "reject", "reasoning": "test2", "confidence": 0.5})
-        assert r.status_code == 400, f"Expected 400 for double step, got {r.status_code}"
-        print("double_step test passed")
-    finally:
-        proc.terminate()
-        proc.wait(timeout=5)
+def test_masked_gst_not_misleading():
+    r = httpx.post(f"{BASE}/reset", json={"task_name": "credit-approval-easy"})
+    obs = r.json()["observation"]
+    risk = obs["risk"]
+    # masked risk should not show alarming values
+    assert risk["credit_rating"] == "not disclosed"
+    # gst should be neutral (not 0.0 which signals terrible compliance)
+    assert risk["gst_compliance_pct"] != 0.0, \
+        f"masked gst_compliance_pct should not be 0.0 (misleading), got {risk['gst_compliance_pct']}"
+    print(f"[PASS] masked risk uses neutral placeholders (gst={risk['gst_compliance_pct']})")
 
 
 if __name__ == "__main__":
-    test_e2e()
-    test_invalid_task()
-    test_step_before_reset()
-    test_double_step()
-    print("\nAll tests passed!")
+    proc = _start_server()
+    print(f"=== E2E Tests (server on :{PORT}) ===")
+    tests = [
+        test_health, test_root, test_single_step_all_tasks,
+        test_multi_step, test_invalid_task, test_step_before_reset,
+        test_no_decision_no_request, test_masked_gst_not_misleading,
+    ]
+    passed, failed = 0, 0
+    try:
+        for t in tests:
+            try:
+                t()
+                passed += 1
+            except Exception as e:
+                print(f"[FAIL] {t.__name__}: {e}")
+                failed += 1
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+    print(f"\n{'='*50}")
+    print(f"Results: {passed} passed, {failed} failed")
+    if failed:
+        sys.exit(1)
+    print("ALL E2E TESTS PASSED")

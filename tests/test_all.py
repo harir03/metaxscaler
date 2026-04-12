@@ -123,7 +123,9 @@ def test_reset_hides_risk_market():
         f"Market should be hidden, got {obs.market.sector_outlook}"
     assert "risk" in result.info.get("hidden", []), "Info should list risk as hidden"
     assert "market" in result.info.get("hidden", []), "Info should list market as hidden"
-    print("[PASS] S1: Reset masks risk and market data")
+    assert obs.risk.gst_compliance_pct == 50.0, \
+        f"Masked GST should be 50.0 (neutral), got {obs.risk.gst_compliance_pct}"
+    print("[PASS] S1: Reset masks risk and market data with neutral defaults")
 
 
 def test_request_info_reveals_data():
@@ -337,13 +339,25 @@ def test_double_step():
     print("[PASS] Edge: Double step raises RuntimeError")
 
 
-def test_state_no_ground_truth_leak():
-    """State endpoint should not expose ground truth."""
+def test_step_info_no_ground_truth():
+    """Step info must NOT contain ground truth — prevents data leaking."""
+    env = CreditApprovalEnvironment()
+    env.reset("credit-approval-easy")
+    result = env.step(CreditAction(decision="approve", reasoning="test", confidence=0.5))
+    info = result.info
+    assert "ground_truth_decision" not in info, "GT decision leaked in step info"
+    assert "ground_truth_score" not in info, "GT score leaked in step info"
+    assert "ground_truth_reason" not in info, "GT reason leaked in step info"
+    assert "grade_breakdown" in info, "breakdown should be in info"
+    assert "steps_taken" in info, "steps_taken should be in info"
+    print("[PASS] Edge: Step info does not leak ground truth")
+
+
+def test_state_fields():
+    """State endpoint returns expected fields without GT."""
     env = CreditApprovalEnvironment()
     env.reset("credit-approval-easy")
     state = env.state()
-    # the state object has ground_truth fields but the API shouldn't expose them
-    # this test checks the model; app.py filters it in the endpoint
     assert hasattr(state, "episode_id")
     assert hasattr(state, "step")
     print("[PASS] Edge: State has expected fields")
@@ -380,7 +394,8 @@ if __name__ == "__main__":
         # edge cases
         test_step_without_reset,
         test_double_step,
-        test_state_no_ground_truth_leak,
+        test_step_info_no_ground_truth,
+        test_state_fields,
     ]
 
     passed = 0

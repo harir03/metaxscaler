@@ -1,88 +1,21 @@
-# ──────────────────────────────────────────────
-# Credit Approval Environment — Docker Compose
-# ──────────────────────────────────────────────
-# Usage:
-#   docker compose up env-server    # just the OpenEnv environment
-#   docker compose up -d            # all services (env + backend infra)
-#   docker compose logs -f env-server
-#
-# OpenEnv Environment: http://localhost:8000
-#   POST /reset    — start new episode
-#   POST /step     — submit decision
-#   GET  /state    — current state
-#   GET  /health   — health check
-
-version: "3.9"
-
 networks:
   ic-network:
     driver: bridge
 
 services:
-
-  # ── OpenEnv Environment Server (PRIMARY) ──
-
   env-server:
     build:
       context: .
-      dockerfile: server/Dockerfile
+      dockerfile: Dockerfile
     container_name: credit-approval-env
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "7860:7860"
     networks:
       - ic-network
     mem_limit: 512m
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:7860/health || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
-
-  # ── Infrastructure (optional — for full Intelli-Credit backend) ──
-
-  redis:
-    image: redis:7-alpine
-    container_name: ic-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - ic-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-    mem_limit: 256m
-    profiles:
-      - backend
-
-  postgres:
-    image: postgres:15-alpine
-    container_name: ic-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-intellicredit}
-      POSTGRES_USER: ${POSTGRES_USER:-intellicredit}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - ic-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-intellicredit}"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    mem_limit: 512m
-    profiles:
-      - backend
-
-volumes:
-  redis_data:
-  postgres_data:
