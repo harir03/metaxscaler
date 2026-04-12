@@ -137,11 +137,32 @@ def test_masked_gst_not_misleading():
     print(f"[PASS] masked risk uses neutral placeholders (gst={risk['gst_compliance_pct']})")
 
 
+def test_reset_no_body():
+    """POST /reset with NO body must return 200 (validator sends this)."""
+    r = httpx.post(f"{BASE}/reset")
+    assert r.status_code == 200, f"reset with no body returned {r.status_code}: {r.text}"
+    d = r.json()
+    assert not d["done"]
+    assert d["reward"] == 0.0
+    assert d["observation"]["difficulty"] == "easy", "no-body reset should default to easy"
+    print("[PASS] POST /reset with no body returns 200 (validator compat)")
+
+
+def test_reset_empty_body():
+    """POST /reset with {} should also work."""
+    r = httpx.post(f"{BASE}/reset", json={})
+    assert r.status_code == 200, f"reset with empty body returned {r.status_code}: {r.text}"
+    d = r.json()
+    assert not d["done"]
+    print("[PASS] POST /reset with empty body {} returns 200")
+
+
 if __name__ == "__main__":
     proc = _start_server()
     print(f"=== E2E Tests (server on :{PORT}) ===")
     tests = [
-        test_health, test_root, test_single_step_all_tasks,
+        test_health, test_root, test_reset_no_body, test_reset_empty_body,
+        test_single_step_all_tasks,
         test_multi_step, test_invalid_task, test_step_before_reset,
         test_no_decision_no_request, test_masked_gst_not_misleading,
     ]

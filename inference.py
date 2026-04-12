@@ -1,3 +1,8 @@
+"""
+Inference Script — Credit Approval Environment
+Uses OpenAI Client for all LLM calls as required.
+Emits [START], [STEP], [END] structured stdout per spec.
+"""
 import asyncio
 import os
 import json
@@ -6,7 +11,6 @@ import sys
 import textwrap
 import traceback
 from typing import List, Optional
-
 
 def _ensure_installed(pkg, pip_name=None):
     pip_name = pip_name or pkg
@@ -19,7 +23,6 @@ def _ensure_installed(pkg, pip_name=None):
              "--root-user-action=ignore", pip_name],
             stdout=subprocess.DEVNULL,
         )
-
 
 _ensure_installed("openai", "openai>=1.0.0")
 
@@ -119,7 +122,6 @@ def _get_decision(llm, obs_data):
         )
         text = (resp.choices[0].message.content or "").strip()
 
-        # strip markdown fences if the model wraps json in them
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:
@@ -151,18 +153,15 @@ async def main():
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env = await DockerEnvClient.from_docker_image(IMAGE_NAME, container_port=7860)
 
-    all_rewards = []
-    total_steps = 0
-    total_score = 0.0
-
     try:
         for task in TASKS:
-            rewards = []
-            steps = 0
+            rewards: List[float] = []
+            step_num = 0
+
             log_start(task=task, env=BENCHMARK, model=MODEL_NAME)
 
             try:
-                for _ in range(EPISODES_PER_TASK):
+                for ep in range(EPISODES_PER_TASK):
                     result = await env.reset(task_name=task)
                     obs = result.observation if isinstance(result.observation, dict) else {}
                     info = result.info if isinstance(result.info, dict) else {}
@@ -173,9 +172,9 @@ async def main():
                         req_key = f"{cat}_data" if not cat.endswith("_data") else cat
                         result = await env.step({"request": req_key})
                         obs = result.observation if isinstance(result.observation, dict) else obs
-                        steps += 1
+                        step_num += 1
                         log_step(
-                            step=steps,
+                            step=step_num,
                             action=f"request({req_key})",
                             reward=0.0, done=False, error=None,
                         )
@@ -185,10 +184,10 @@ async def main():
 
                     reward = max(0.0, min(1.0, float(result.reward or 0.0)))
                     rewards.append(reward)
-                    steps += 1
+                    step_num += 1
 
                     log_step(
-                        step=steps,
+                        step=step_num,
                         action=f"{action['decision']}(conf={action['confidence']:.2f})",
                         reward=reward,
                         done=result.done,
@@ -200,11 +199,12 @@ async def main():
 
             score = sum(rewards) / len(rewards) if rewards else 0.0
             score = max(0.0, min(1.0, score))
-            log_end(success=score >= SUCCESS_THRESHOLD, steps=steps, score=score, rewards=rewards)
-
-            all_rewards.extend(rewards)
-            total_steps += steps
-            total_score += score
+            log_end(
+                success=score >= SUCCESS_THRESHOLD,
+                steps=step_num,
+                score=score,
+                rewards=rewards,
+            )
 
     finally:
         try:

@@ -4,7 +4,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from models import CreditAction
@@ -29,7 +29,6 @@ class StepReq(BaseModel):
 def _env_result_to_dict(result):
     obs = result.observation
     obs_dict = obs.model_dump() if obs else {}
-    # strip ground truth from observation
     obs_dict.pop("ground_truth_decision", None)
     obs_dict.pop("ground_truth_score", None)
     return {
@@ -41,8 +40,14 @@ def _env_result_to_dict(result):
 
 
 @app.post("/reset")
-async def reset(req: ResetReq):
+async def reset(request: Request):
     try:
+        body = await request.body()
+        if body and body.strip():
+            data = await request.json()
+            req = ResetReq(**data)
+        else:
+            req = ResetReq()
         result = env.reset(task_name=req.task_name)
         return _env_result_to_dict(result)
     except ValueError as e:
@@ -50,8 +55,15 @@ async def reset(req: ResetReq):
 
 
 @app.post("/step")
-async def step(req: StepReq):
+async def step(request: Request):
     try:
+        body = await request.body()
+        if body and body.strip():
+            data = await request.json()
+            req = StepReq(**data)
+        else:
+            raise HTTPException(400, "step requires a body with 'decision' or 'request'")
+
         if req.request:
             result = env.request_info(req.request)
             return _env_result_to_dict(result)
@@ -98,7 +110,7 @@ async def root():
 
 def main():
     import uvicorn
-    uvicorn.run("server.app:app", host="0.0.0.0", port=8000)
+    uvicorn.run("server.app:app", host="0.0.0.0", port=7860)
 
 
 if __name__ == "__main__":
